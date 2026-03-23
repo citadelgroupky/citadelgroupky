@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://agznogsjlufjvfecjyld.supabase.co; img-src 'self' data:;">
 <title>Citadel Group</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600&family=Barlow+Condensed:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
@@ -363,6 +364,11 @@ tbody td strong{color:var(--white);}
           <span class="status-dot"></span>CLOCKED OUT
         </div>
         <div class="clock-since" id="clock-since" style="display:none;"></div>
+        <div id="clock-location-wrap" style="margin-bottom:20px;">
+          <select id="clock-location-select" style="background:rgba(255,255,255,0.06);border:1px solid var(--border-bright);border-radius:6px;padding:12px 16px;color:var(--white);font-family:'Barlow Condensed',sans-serif;font-size:14px;letter-spacing:1px;width:100%;outline:none;-webkit-appearance:none;">
+            <option value="">— Select Location —</option>
+          </select>
+        </div>
         <div class="clock-btn-row">
           <button type="button" class="big-btn big-btn-in" id="btn-clock-in">CLOCK IN</button>
           <button type="button" class="big-btn big-btn-out" id="btn-clock-out" disabled>CLOCK OUT</button>
@@ -371,7 +377,7 @@ tbody td strong{color:var(--white);}
       <div class="card">
         <div class="card-title">Time Entries</div>
         <table>
-          <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Hrs</th></tr></thead>
+          <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Location</th><th>Hrs</th></tr></thead>
           <tbody id="clock-log"></tbody>
         </table>
       </div>
@@ -615,6 +621,7 @@ tbody td strong{color:var(--white);}
     </div>
   </div>
 </div>
+  <div class="modal-overlay" id="modal-add-location">
   <div class="modal">
     <button type="button" class="modal-close" id="close-add-loc">&#10005;</button>
     <div class="modal-title">Add Location</div>
@@ -957,27 +964,41 @@ function loadClockState() {
   else { clockedInAt = null; syncClockUI(false); }
 }
 
+function populateClockLocations() {
+  const sel = document.getElementById('clock-location-select');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— Select Location —</option>' +
+    store.locations.map(l=>`<option value="${l.name}">${l.name}</option>`).join('');
+  if (current) sel.value = current;
+}
+
 function syncClockUI(isClockedIn) {
-  const badge  = document.getElementById('clock-badge');
-  const since  = document.getElementById('clock-since');
-  const btnIn  = document.getElementById('btn-clock-in');
-  const btnOut = document.getElementById('btn-clock-out');
+  const badge    = document.getElementById('clock-badge');
+  const since    = document.getElementById('clock-since');
+  const btnIn    = document.getElementById('btn-clock-in');
+  const btnOut   = document.getElementById('btn-clock-out');
+  const locWrap  = document.getElementById('clock-location-wrap');
   if (!badge) return;
   if (isClockedIn) {
     badge.className = 'clock-badge cb-in';
     badge.innerHTML = '<span class="status-dot"></span>CLOCKED IN';
-    if (btnIn)  btnIn.disabled  = true;
-    if (btnOut) btnOut.disabled = false;
+    if (btnIn)   btnIn.disabled   = true;
+    if (btnOut)  btnOut.disabled  = false;
+    if (locWrap) locWrap.style.display = 'none';
     if (since && clockedInAt) {
       since.style.display = 'block';
-      since.textContent = 'Since '+clockedInAt.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+      const loc = localStorage.getItem(clockKey()+'_loc') || '';
+      since.textContent = 'Since '+clockedInAt.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) + (loc ? ' · '+loc : '');
     }
   } else {
     badge.className = 'clock-badge cb-out';
     badge.innerHTML = '<span class="status-dot"></span>CLOCKED OUT';
-    if (btnIn)  btnIn.disabled  = false;
-    if (btnOut) btnOut.disabled = true;
-    if (since) since.style.display = 'none';
+    if (btnIn)   btnIn.disabled   = false;
+    if (btnOut)  btnOut.disabled  = true;
+    if (locWrap) locWrap.style.display = 'block';
+    if (since)   since.style.display   = 'none';
+    populateClockLocations();
   }
 }
 
@@ -1004,21 +1025,27 @@ function startClockTimer() {
 async function doClock(action) {
   const now = new Date();
   if (action === 'in') {
+    const locSel = document.getElementById('clock-location-select');
+    const loc = locSel ? locSel.value : '';
+    if (!loc) { showToast('Please select a location first', 'error'); return; }
     clockedInAt = now;
     localStorage.setItem(clockKey(), now.getTime().toString());
+    localStorage.setItem(clockKey()+'_loc', loc);
     syncClockUI(true);
     startClockTimer();
-    showToast('Clocked in', 'success');
+    showToast('Clocked in at '+loc, 'success');
     if (currentEmpPage === 'overview') renderOverview();
   } else {
     if (!clockedInAt) return;
     const hrs = Math.round((now.getTime()-clockedInAt.getTime())/36000)/100;
+    const loc = localStorage.getItem(clockKey()+'_loc') || '';
     const entry = {
       user_id:   currentUser.id,
       date:      clockedInAt.toISOString().split('T')[0],
       clock_in:  clockedInAt.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true}),
       clock_out: now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true}),
       hours:     hrs,
+      location:  loc,
     };
     try {
       const saved = await sb('time_entries','POST',entry);
@@ -1027,6 +1054,7 @@ async function doClock(action) {
     } catch(e) { showToast('Error saving entry: '+e.message,'error'); return; }
     clockedInAt = null;
     localStorage.removeItem(clockKey());
+    localStorage.removeItem(clockKey()+'_loc');
     syncClockUI(false);
     startClockTimer();
     renderClockLog();
@@ -1040,8 +1068,8 @@ function renderClockLog() {
   const tbody = document.getElementById('clock-log');
   if (!tbody) return;
   tbody.innerHTML = entries.length
-    ? entries.slice(0,20).map(e=>`<tr><td><strong>${formatDate(e.date)}</strong></td><td>${e.clockIn}</td><td>${e.clockOut||'<span style="color:var(--success-light)">Active</span>'}</td><td><strong>${parseFloat(e.hours).toFixed(2)}</strong></td></tr>`).join('')
-    : `<tr><td colspan="4" class="empty">NO ENTRIES YET</td></tr>`;
+    ? entries.slice(0,20).map(e=>`<tr><td><strong>${formatDate(e.date)}</strong></td><td>${e.clockIn}</td><td>${e.clockOut||'<span style="color:var(--success-light)">Active</span>'}</td><td>${e.location||'—'}</td><td><strong>${parseFloat(e.hours).toFixed(2)}</strong></td></tr>`).join('')
+    : `<tr><td colspan="5" class="empty">NO ENTRIES YET</td></tr>`;
   const tot = entries.reduce((s,e)=>s+parseFloat(e.hours||0),0);
   const ph = document.getElementById('period-hours');
   if (ph) ph.textContent = tot.toFixed(2);
@@ -1596,39 +1624,44 @@ document.querySelectorAll('.admin-nav-btn').forEach(btn=>{
   btn.addEventListener('click',()=>showAdminPage(btn.dataset.page));
 });
 
-document.getElementById('btn-clock-in').addEventListener('click',  ()=>doClock('in'));
-document.getElementById('btn-clock-out').addEventListener('click', ()=>doClock('out'));
-document.getElementById('to-submit-btn').addEventListener('click', submitTimeOff);
+function wire(id, evt, fn) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener(evt, fn);
+}
 
-document.getElementById('more-incidents').addEventListener('click',()=>showMoreSub('incidents'));
-document.getElementById('more-crew').addEventListener('click',     ()=>showMoreSub('crew'));
-document.getElementById('more-clocked').addEventListener('click',  ()=>showMoreSub('clocked'));
-document.getElementById('more-back').addEventListener('click',     ()=>showEmpPage('overview'));
-document.getElementById('back-from-incidents').addEventListener('click',()=>renderMoreMenu());
-document.getElementById('back-from-crew').addEventListener('click',    ()=>renderMoreMenu());
-document.getElementById('back-from-clocked').addEventListener('click', ()=>renderMoreMenu());
+wire('btn-clock-in',  'click', ()=>doClock('in'));
+wire('btn-clock-out', 'click', ()=>doClock('out'));
+wire('to-submit-btn', 'click', submitTimeOff);
 
-document.getElementById('sev-Low').addEventListener('click',    ()=>setSeverity('Low'));
-document.getElementById('sev-Medium').addEventListener('click', ()=>setSeverity('Medium'));
-document.getElementById('sev-High').addEventListener('click',   ()=>setSeverity('High'));
-document.getElementById('inc-submit').addEventListener('click', submitIncident);
+wire('more-incidents',       'click', ()=>showMoreSub('incidents'));
+wire('more-crew',            'click', ()=>showMoreSub('crew'));
+wire('more-clocked',         'click', ()=>showMoreSub('clocked'));
+wire('more-back',            'click', ()=>showEmpPage('overview'));
+wire('back-from-incidents',  'click', ()=>renderMoreMenu());
+wire('back-from-crew',       'click', ()=>renderMoreMenu());
+wire('back-from-clocked',    'click', ()=>renderMoreMenu());
 
-document.getElementById('payroll-emp-filter').addEventListener('change',renderPayroll);
-document.getElementById('payroll-from').addEventListener('change',renderPayroll);
-document.getElementById('payroll-to').addEventListener('change',renderPayroll);
-document.getElementById('export-btn').addEventListener('click',exportPayroll);
+wire('sev-Low',    'click', ()=>setSeverity('Low'));
+wire('sev-Medium', 'click', ()=>setSeverity('Medium'));
+wire('sev-High',   'click', ()=>setSeverity('High'));
+wire('inc-submit', 'click', submitIncident);
 
-document.getElementById('atab-employees').addEventListener('click',()=>switchAdminTab('employees'));
-document.getElementById('atab-locations').addEventListener('click',()=>switchAdminTab('locations'));
-document.getElementById('atab-settings').addEventListener('click', ()=>switchAdminTab('settings'));
-document.getElementById('save-settings-btn').addEventListener('click',saveSettings);
+wire('payroll-emp-filter', 'change', renderPayroll);
+wire('payroll-from',       'change', renderPayroll);
+wire('payroll-to',         'change', renderPayroll);
+wire('export-btn',         'click',  exportPayroll);
 
-document.getElementById('open-add-emp').addEventListener('click',   openAddEmployee);
-document.getElementById('close-add-emp').addEventListener('click',  ()=>closeModal('modal-add-employee'));
-document.getElementById('cancel-add-emp').addEventListener('click', ()=>closeModal('modal-add-employee'));
-document.getElementById('confirm-add-emp').addEventListener('click',saveEmployee);
+wire('atab-employees',   'click', ()=>switchAdminTab('employees'));
+wire('atab-locations',   'click', ()=>switchAdminTab('locations'));
+wire('atab-settings',    'click', ()=>switchAdminTab('settings'));
+wire('save-settings-btn','click', saveSettings);
 
-document.getElementById('cancel-delete').addEventListener('click',()=>closeModal('modal-confirm-delete'));
+wire('open-add-emp',   'click', openAddEmployee);
+wire('close-add-emp',  'click', ()=>closeModal('modal-add-employee'));
+wire('cancel-add-emp', 'click', ()=>closeModal('modal-add-employee'));
+wire('confirm-add-emp','click', saveEmployee);
+
+wire('cancel-delete', 'click', ()=>closeModal('modal-confirm-delete'));
 document.getElementById('confirm-delete').addEventListener('click',async()=>{
   if (!deletingEmpId) return;
   try {
